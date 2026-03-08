@@ -1,57 +1,62 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
-import 'react-native-reanimated';
+﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Stack, useRouter, useSegments } from "expo-router";
+import { useEffect, useMemo } from "react";
+import { ActivityIndicator, View } from "react-native";
 
-import { useColorScheme } from '@/components/useColorScheme';
+import { useAuthStore } from "@/src/features/auth/auth.store";
+import { colors } from "@/src/theme/colors";
 
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
-
-export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
-};
-
-// Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
-
-export default function RootLayout() {
-  const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-  });
-
-  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
-  useEffect(() => {
-    if (error) throw error;
-  }, [error]);
+function AuthGate() {
+  const router = useRouter();
+  const segments = useSegments();
+  const session = useAuthStore((state) => state.session);
+  const isHydrating = useAuthStore((state) => state.isHydrating);
+  const hydrate = useAuthStore((state) => state.hydrate);
 
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
+    void hydrate();
+  }, [hydrate]);
+
+  useEffect(() => {
+    if (isHydrating) {
+      return;
     }
-  }, [loaded]);
 
-  if (!loaded) {
-    return null;
+    const inAuthGroup = segments[0] === "(auth)";
+
+    if (!session && !inAuthGroup) {
+      router.replace("/(auth)/login");
+      return;
+    }
+
+    if (session && inAuthGroup) {
+      router.replace("/(app)");
+    }
+  }, [isHydrating, router, segments, session]);
+
+  if (isHydrating) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
   }
 
-  return <RootLayoutNav />;
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(auth)" />
+      <Stack.Screen name="(app)" />
+      <Stack.Screen name="+not-found" />
+    </Stack>
+  );
 }
 
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+export default function RootLayout() {
+  const queryClient = useMemo(() => new QueryClient(), []);
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthGate />
+    </QueryClientProvider>
   );
 }
