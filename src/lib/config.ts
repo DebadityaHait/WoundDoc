@@ -10,6 +10,8 @@ export const appConfig = {
   classificationApiBase: normalizeBase(process.env.EXPO_PUBLIC_CLASSIFICATION_API_BASE),
   /** Wound size + tissue-area API (Aerobiosys-Wound-Size-Space). Optional – falls back to segmentation API if not set. */
   sizeApiBase: normalizeBase(process.env.EXPO_PUBLIC_SIZE_API_BASE),
+  /** Gemini API key for AI-powered wound analysis. */
+  geminiApiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? "",
 };
 
 export function isInferenceConfigured() {

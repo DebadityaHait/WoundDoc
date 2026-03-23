@@ -4,6 +4,7 @@ import { Alert, FlatList, Image, Modal, Pressable, StyleSheet, Text, View } from
 
 import { AppButton } from "@/src/components/AppButton";
 import { AppCard } from "@/src/components/AppCard";
+import { AiAnalysisCard } from "@/src/components/AiAnalysisCard";
 import { AreaSparkline } from "@/src/components/AreaSparkline";
 import { EmptyState } from "@/src/components/EmptyState";
 import { ImageCompareToggle } from "@/src/components/ImageCompareToggle";
@@ -11,6 +12,7 @@ import { StatChip } from "@/src/components/StatChip";
 import { TissueHistoryChart } from "@/src/components/TissueHistoryChart";
 import { WoundTypeBadge } from "@/src/components/WoundTypeBadge";
 import { WoundTypePickerModal } from "@/src/components/WoundTypePickerModal";
+import { geminiClient } from "@/src/features/inference/gemini.client";
 import { useWoundsStore } from "@/src/features/wounds/wounds.store";
 import { computeAreaTrend, getAreaHistory, getTissueHistory, getWoundStats } from "@/src/features/wounds/woundSelectors";
 import { formatLongDateTime } from "@/src/lib/date";
@@ -103,6 +105,8 @@ export default function WoundDetailScreen() {
   const deleteWound = useWoundsStore((state) => state.deleteWound);
   const deleteObservation = useWoundsStore((state) => state.deleteObservation);
   const updateWoundType = useWoundsStore((state) => state.updateWoundType);
+  const saveWoundAiAnalysis = useWoundsStore((state) => state.saveWoundAiAnalysis);
+  const saveObservationAiAnalysis = useWoundsStore((state) => state.saveObservationAiAnalysis);
 
   const wound = useMemo(() => wounds.find((item) => item.id === woundId), [woundId, wounds]);
   const trend = wound ? computeAreaTrend(wound) : null;
@@ -257,6 +261,22 @@ export default function WoundDetailScreen() {
               </AppCard>
             ) : null}
 
+            {/* ── AI Progress Analysis ────────────────────────────────── */}
+            <AiAnalysisCard
+              analysis={wound.aiAnalysis ?? null}
+              analyseLabel="🤖  Analyse Healing Progress"
+              onAnalyse={async () => {
+                const result = await geminiClient.analyzeProgress(wound, "all");
+                await saveWoundAiAnalysis(wound.id, { ...result, generatedAt: new Date().toISOString(), mode: "progress_all" });
+              }}
+              showSecondary={observations.length >= 2}
+              secondaryLabel="🔄  Compare Last Two Visits"
+              onSecondaryAnalyse={async () => {
+                const result = await geminiClient.analyzeProgress(wound, "last_two");
+                await saveWoundAiAnalysis(wound.id, { ...result, generatedAt: new Date().toISOString(), mode: "progress_last_two" });
+              }}
+            />
+
             {/* Danger zone: delete entire wound */}
             <Pressable style={styles.deleteWoundRow} onPress={handleDeleteWound}>
               <Text style={styles.deleteWoundText}>🗑  Delete this wound</Text>
@@ -363,6 +383,20 @@ export default function WoundDetailScreen() {
                 <Text style={styles.noteText}>{item.notes}</Text>
               </View>
             ) : null}
+
+            {/* Per-observation AI analysis */}
+            <AiAnalysisCard
+              analysis={item.aiAnalysis ?? null}
+              analyseLabel="🤖  Analyse this observation"
+              onAnalyse={async () => {
+                const result = await geminiClient.analyzeObservation(item, wound);
+                await saveObservationAiAnalysis(wound.id, item.id, {
+                  ...result,
+                  generatedAt: new Date().toISOString(),
+                  mode: "observation",
+                });
+              }}
+            />
           </AppCard>
         )}
         ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}

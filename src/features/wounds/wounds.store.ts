@@ -16,6 +16,10 @@ type WoundsStore = {
   deleteObservation: (woundId: string, observationId: string) => Promise<void>;
   /** Delete an entire wound record and all its media files. */
   deleteWound: (woundId: string) => Promise<void>;
+  /** Save AI analysis result to a wound-level field. */
+  saveWoundAiAnalysis: (woundId: string, analysis: NonNullable<WoundRecord["aiAnalysis"]>) => Promise<void>;
+  /** Save AI analysis result to a specific observation. */
+  saveObservationAiAnalysis: (woundId: string, observationId: string, analysis: NonNullable<WoundObservation["aiAnalysis"]>) => Promise<void>;
   /** Manually override the wound type classification. */
   updateWoundType: (woundId: string, topClassKey: string) => Promise<void>;
   /** Update wound label and/or body location. */
@@ -128,6 +132,30 @@ export const useWoundsStore = create<WoundsStore>((set, get) => ({
     } catch { /* ignore */ }
 
     const wounds = get().wounds.filter((w) => w.id !== woundId);
+    await woundRepository.saveAll(wounds);
+    set({ wounds, error: null });
+  },
+
+  saveWoundAiAnalysis: async (woundId, analysis) => {
+    const now = new Date().toISOString();
+    const wounds = get().wounds.map((w) =>
+      w.id !== woundId ? w : { ...w, updatedAt: now, aiAnalysis: analysis }
+    );
+    await woundRepository.saveAll(wounds);
+    set({ wounds, error: null });
+  },
+
+  saveObservationAiAnalysis: async (woundId, observationId, analysis) => {
+    const wounds = get().wounds.map((w) =>
+      w.id !== woundId
+        ? w
+        : {
+            ...w,
+            observations: w.observations.map((o) =>
+              o.id !== observationId ? o : { ...o, aiAnalysis: analysis }
+            ),
+          }
+    );
     await woundRepository.saveAll(wounds);
     set({ wounds, error: null });
   },

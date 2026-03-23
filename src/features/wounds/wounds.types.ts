@@ -39,6 +39,16 @@ export type WoundObservation = {
     classificationModelVersion?: string;
   };
   notes?: string;
+  /** AI-generated clinical analysis for this observation (Gemini). */
+  aiAnalysis?: {
+    summary: string;
+    keyFindings: string[];
+    recommendations: string[];
+    healingTrajectory?: "improving" | "stable" | "worsening" | "insufficient_data";
+    concerns: string[];
+    generatedAt: string;
+    mode: "observation" | "progress_all" | "progress_last_two";
+  };
 };
 
 export type WoundRecord = {
@@ -51,4 +61,14 @@ export type WoundRecord = {
   coverImageUri: string;
   observations: WoundObservation[];
   notes?: string;
+  /** Wound-level AI analysis (progress across all observations). */
+  aiAnalysis?: {
+    summary: string;
+    keyFindings: string[];
+    recommendations: string[];
+    healingTrajectory?: "improving" | "stable" | "worsening" | "insufficient_data";
+    concerns: string[];
+    generatedAt: string;
+    mode: "observation" | "progress_all" | "progress_last_two";
+  };
 };
