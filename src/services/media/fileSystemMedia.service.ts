@@ -27,6 +27,32 @@ async function ensureMediaDirs(): Promise<void> {
 }
 
 export class FileSystemMediaService {
+  /** Delete all media files (originals + overlays) for a single observation. */
+  async deleteObservationMedia(woundId: string, observationId: string): Promise<void> {
+    if (isWeb) return;
+    const patterns = [
+      `${originalsDir}/${woundId}_${observationId}`,
+      `${overlaysDir}/${woundId}_${observationId}`,
+    ];
+    for (const prefix of patterns) {
+      // Try common extensions
+      for (const ext of ["jpg", "jpeg", "png", "webp"]) {
+        const path = `${prefix}.${ext}`;
+        try {
+          const info = await FileSystem.getInfoAsync(path);
+          if (info.exists) await FileSystem.deleteAsync(path, { idempotent: true });
+        } catch {
+          // ignore missing files
+        }
+      }
+    }
+  }
+
+  /** Delete ALL media files for a wound (all observations). */
+  async deleteWoundMedia(woundId: string, observationIds: string[]): Promise<void> {
+    await Promise.all(observationIds.map((obsId) => this.deleteObservationMedia(woundId, obsId)));
+  }
+
   async saveOriginalFromUri(sourceUri: string, woundId: string, observationId: string): Promise<string> {
     if (isWeb) {
       // Web cannot persist to app file-system; keep browser URI/reference.
@@ -42,13 +68,27 @@ export class FileSystemMediaService {
 
   async saveOverlayFromDataUrl(dataUrl: string, woundId: string, observationId: string): Promise<string> {
     if (isWeb) {
-      // Keep overlay as data URL for web rendering.
       return dataUrl;
     }
 
     await ensureMediaDirs();
     const payload = stripDataUrlPrefix(dataUrl);
     const destination = `${overlaysDir}/${woundId}_${observationId}.jpg`;
+    await FileSystem.writeAsStringAsync(destination, payload, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return destination;
+  }
+
+  /** Save the perspective-rectified overlay with a distinct filename suffix. */
+  async saveRectifiedOverlayFromDataUrl(dataUrl: string, woundId: string, observationId: string): Promise<string> {
+    if (isWeb) {
+      return dataUrl;
+    }
+
+    await ensureMediaDirs();
+    const payload = stripDataUrlPrefix(dataUrl);
+    const destination = `${overlaysDir}/${woundId}_${observationId}_rectified.jpg`;
     await FileSystem.writeAsStringAsync(destination, payload, {
       encoding: FileSystem.EncodingType.Base64,
     });

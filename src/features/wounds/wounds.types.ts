@@ -10,12 +10,27 @@ export type WoundObservation = {
   woundId: string;
   capturedAt: string;
   originalImageUri: string;
+  /** Tissue-coloured overlay drawn on the original (perspective-distorted) photo. */
   segmentationOverlayUri?: string;
+  /** Perspective-corrected tissue map — the rectified view used for area measurements. */
+  rectifiedOverlayUri?: string;
   segmentationRawMaskUri?: string;
   metrics?: {
     totalAreaCm2?: number;
     infectionRiskScore?: "Low" | "Medium" | "High" | string;
+    /** Tissue type → percentage of wound area (0–100) */
     tissueComposition?: Record<string, number>;
+    /** Tissue type → area in cm² (ArUco-calibrated, from size-space API) */
+    tissueAreaCm2?: Record<string, number>;
+    /** Detailed per-tissue info: percentage + area_cm2 */
+    tissueSizeInformation?: Record<string, { percentage: number; area_cm2: number }>;
+    /** ArUco calibration metadata */
+    calibration?: {
+      method?: string;
+      marker_ids_detected?: number[];
+      marker_size_cm?: number;
+      pixels_per_cm?: number;
+    };
   };
   apiMeta?: {
     classificationRequestId?: string;

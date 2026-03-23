@@ -1,4 +1,4 @@
-﻿import * as ImagePicker from "expo-image-picker";
+import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import { Image, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -8,13 +8,14 @@ import { AppCard } from "@/src/components/AppCard";
 import { EmptyState } from "@/src/components/EmptyState";
 import { LoadingOverlay } from "@/src/components/LoadingOverlay";
 import { inferenceClient } from "@/src/features/inference/inference.client";
-import { mapSegmentationToObservationMetrics, pickOverlayDataUrl } from "@/src/features/inference/inference.mappers";
+import { mapSegmentationToObservationMetrics, pickOverlayDataUrl, pickRectifiedOverlayDataUrl } from "@/src/features/inference/inference.mappers";
 import { WoundObservation } from "@/src/features/wounds/wounds.types";
 import { useWoundsStore } from "@/src/features/wounds/wounds.store";
 import { readImageAsDataUrl } from "@/src/lib/image";
 import { createId, isNonEmpty } from "@/src/lib/validators";
 import { inferApiMessage } from "@/src/services/api/httpClient";
 import { fileSystemMediaService } from "@/src/services/media/fileSystemMedia.service";
+import { appConfig } from "@/src/lib/config";
 import { colors } from "@/src/theme/colors";
 import { radius } from "@/src/theme/radius";
 import { spacing } from "@/src/theme/spacing";
@@ -28,6 +29,8 @@ export default function AddObservationScreen() {
 
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [markerSizeCm, setMarkerSizeCm] = useState("2.0");
+  const [sizeWarning, setSizeWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -73,23 +76,58 @@ export default function AddObservationScreen() {
 
     setIsSaving(true);
     setError(null);
+    setSizeWarning(null);
 
     const observationId = createId("obs");
+
+    const parsedMarkerSize = parseFloat(markerSizeCm);
+    const validMarkerSize = !isNaN(parsedMarkerSize) && parsedMarkerSize > 0 ? parsedMarkerSize : 2.0;
 
     try {
       const localOriginalUri = await fileSystemMediaService.saveOriginalFromUri(imageUri, wound.id, observationId);
       const imageBase64 = await readImageAsDataUrl(localOriginalUri);
-      const segmentation = await inferenceClient.segmentWound({ imageBase64 });
-      const overlayDataUrl = pickOverlayDataUrl(segmentation);
 
-      if (!overlayDataUrl && !segmentation.analysis) {
+      // Run basic segmentation and size+tissue detection in parallel.
+      const [segmentationResult, sizeResult] = await Promise.allSettled([
+        inferenceClient.segmentWound({ imageBase64 }),
+        inferenceClient.detectWoundSize({ imageBase64, markerSizeCm: validMarkerSize }),
+      ]);
+
+      if (segmentationResult.status !== "fulfilled") {
         setError("Segmentation returned no overlay and no metrics. Try another image.");
         return;
       }
 
-      const overlayUri = overlayDataUrl
-        ? await fileSystemMediaService.saveOverlayFromDataUrl(overlayDataUrl, wound.id, observationId)
-        : undefined;
+      const segmentation = segmentationResult.value;
+
+      // Use size-detection result when available (richer: tissue areas, ArUco calibration).
+      const primaryResult = sizeResult.status === "fulfilled" ? sizeResult.value : segmentation;
+
+      if (sizeResult.status !== "fulfilled") {
+        const sizeReason = inferApiMessage((sizeResult as PromiseRejectedResult).reason);
+        setSizeWarning(
+          sizeReason?.includes("ArUco")
+            ? "No ArUco marker detected – size measurements unavailable. Place a 4×4 ArUco marker next to the wound for calibrated measurements."
+            : "Size detection failed. Basic segmentation metrics will be used instead."
+        );
+      }
+
+      const overlayDataUrl = pickOverlayDataUrl(primaryResult);
+      const rectifiedDataUrl = pickRectifiedOverlayDataUrl(primaryResult);
+
+      if (!overlayDataUrl && !rectifiedDataUrl && !primaryResult.analysis) {
+        setError("Segmentation returned no overlay and no metrics. Try another image.");
+        return;
+      }
+
+      const [overlayUri, rectifiedOverlayUri] = await Promise.all([
+        overlayDataUrl
+          ? fileSystemMediaService.saveOverlayFromDataUrl(overlayDataUrl, wound.id, observationId)
+          : Promise.resolve(undefined),
+        rectifiedDataUrl
+          ? fileSystemMediaService.saveRectifiedOverlayFromDataUrl(rectifiedDataUrl, wound.id, observationId)
+          : Promise.resolve(undefined),
+      ]);
 
       const observation: WoundObservation = {
         id: observationId,
@@ -97,7 +135,8 @@ export default function AddObservationScreen() {
         capturedAt: new Date().toISOString(),
         originalImageUri: localOriginalUri,
         segmentationOverlayUri: overlayUri,
-        metrics: mapSegmentationToObservationMetrics(segmentation),
+        rectifiedOverlayUri,
+        metrics: mapSegmentationToObservationMetrics(primaryResult),
         apiMeta: {
           segmentationRequestId: segmentation.request_id,
           segmentationModelVersion: segmentation.model_info?.name,
@@ -118,12 +157,45 @@ export default function AddObservationScreen() {
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={styles.container}>
         <AppCard>
-          <Text style={styles.sectionTitle}>Capture follow-up</Text>
-          {imageUri ? <Image source={{ uri: imageUri }} style={styles.previewImage} /> : <Text style={styles.helper}>No observation image selected yet.</Text>}
+          <Text style={styles.sectionTitle}>Capture Follow-up</Text>
+          {imageUri ? (
+            <Image source={{ uri: imageUri }} style={styles.previewImage} />
+          ) : (
+            <View style={styles.imagePlaceholder}>
+              <Text style={styles.placeholderIcon}>📷</Text>
+              <Text style={styles.placeholderText}>Tap to add image</Text>
+            </View>
+          )}
+          
+          <Text style={styles.tip}>
+            <Text style={{ fontWeight: "600" }}>Tip:</Text> Place a 4×4 ArUco marker (DICT_4X4_50) next to the wound for calibrated size + tissue-area measurements with perspective correction.
+          </Text>
+
           <View style={styles.rowButtons}>
             <AppButton label="Gallery" variant="secondary" onPress={selectFromLibrary} />
             <AppButton label="Camera" variant="secondary" onPress={capturePhoto} />
           </View>
+          <AppButton
+            label="📐 Show ArUco Marker"
+            variant="secondary"
+            onPress={() => router.push("/(app)/aruco-marker")}
+          />
+        </AppCard>
+
+        <AppCard>
+          <View style={styles.sectionTitleBar}>
+            <View style={styles.sectionAccent} />
+            <Text style={styles.sectionTitle}>Marker Size</Text>
+          </View>
+          <Text style={styles.helper}>Enter the real side length of your ArUco marker (default 2.0 cm).</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Marker side length in cm (e.g. 2.0)"
+            placeholderTextColor={colors.textMuted}
+            value={markerSizeCm}
+            onChangeText={setMarkerSizeCm}
+            keyboardType="decimal-pad"
+          />
         </AppCard>
 
         <AppCard>
@@ -135,6 +207,7 @@ export default function AddObservationScreen() {
             value={notes}
             onChangeText={setNotes}
           />
+          {sizeWarning ? <Text style={styles.sizeWarning}>{sizeWarning}</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <AppButton label="Save Observation" loading={isSaving} onPress={saveObservation} />
         </AppCard>
@@ -153,22 +226,67 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: colors.text,
     fontWeight: "700",
+    fontSize: 16,
     marginBottom: spacing.sm,
+  },
+  sectionTitleBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  sectionAccent: {
+    width: 4,
+    height: 20,
+    backgroundColor: colors.primary,
+    borderRadius: 2,
   },
   previewImage: {
     width: "100%",
-    height: 260,
+    aspectRatio: 4 / 3,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     marginBottom: spacing.md,
   },
+  imagePlaceholder: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderStyle: "dashed",
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  placeholderIcon: {
+    fontSize: 48,
+    marginBottom: spacing.sm,
+  },
+  placeholderText: {
+    color: colors.textMuted,
+    fontSize: 14,
+    fontWeight: "500",
+  },
   helper: {
     color: colors.textMuted,
+    fontSize: 13,
     marginBottom: spacing.md,
+  },
+  tip: {
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: `${colors.primary}19`,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    marginBottom: spacing.md,
+    lineHeight: 18,
   },
   rowButtons: {
     flexDirection: "row",
     gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
   input: {
     borderWidth: 1,
@@ -184,8 +302,16 @@ const styles = StyleSheet.create({
     minHeight: 84,
     textAlignVertical: "top",
   },
+  sizeWarning: {
+    color: colors.warning,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: spacing.sm,
+  },
   error: {
     color: colors.danger,
+    fontSize: 13,
+    lineHeight: 18,
     marginBottom: spacing.sm,
   },
 });

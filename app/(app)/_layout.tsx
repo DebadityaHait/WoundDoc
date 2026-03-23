@@ -16,6 +16,7 @@ export default function AppLayout() {
       <Stack.Screen name="wounds/new" options={{ title: "New Wound" }} />
       <Stack.Screen name="wounds/[woundId]" options={{ title: "Wound Detail" }} />
       <Stack.Screen name="wounds/add-observation" options={{ title: "Add Observation" }} />
+      <Stack.Screen name="aruco-marker" options={{ title: "ArUco Marker" }} />
     </Stack>
   );
 }

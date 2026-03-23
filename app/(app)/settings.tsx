@@ -1,4 +1,5 @@
-﻿import { ScrollView, StyleSheet, Text, View } from "react-native";
+﻿import { router } from "expo-router";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { AppButton } from "@/src/components/AppButton";
 import { AppCard } from "@/src/components/AppCard";
@@ -28,6 +29,22 @@ export default function SettingsScreen() {
           <Text style={styles.label}>Segmentation</Text>
           <Text style={styles.value}>{appConfig.segmentationApiBase || "Not configured"}</Text>
         </View>
+        <View style={styles.row}>
+          <Text style={styles.label}>Size + Tissue Analysis</Text>
+          <Text style={styles.value}>{appConfig.sizeApiBase || appConfig.segmentationApiBase || "Not configured"}</Text>
+        </View>
+      </AppCard>
+
+      <AppCard>
+        <Text style={styles.sectionTitle}>ArUco Marker</Text>
+        <Text style={styles.value}>
+          Display a physically size-accurate ArUco marker on your screen to use as a calibration reference for wound size measurements.
+        </Text>
+        <AppButton
+          label="📐  Open ArUco Marker Generator"
+          variant="secondary"
+          onPress={() => router.push("/(app)/aruco-marker")}
+        />
       </AppCard>
 
       <AppCard>

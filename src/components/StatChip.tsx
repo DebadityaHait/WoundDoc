@@ -10,8 +10,18 @@ type StatChipProps = {
 };
 
 export function StatChip({ label, tone = "default" }: StatChipProps) {
+  const isDot = tone === "default";
+  const dotColor = tone === "default" ? colors.primary : colors.warning;
+
   return (
     <View style={[styles.chip, tone === "warning" && styles.warning]}>
+      <View
+        style={[
+          styles.dot,
+          { backgroundColor: dotColor },
+          tone === "warning" && styles.warningDot,
+        ]}
+      />
       <Text style={[styles.label, tone === "warning" && styles.warningLabel]}>{label}</Text>
     </View>
   );
@@ -20,18 +30,27 @@ export function StatChip({ label, tone = "default" }: StatChipProps) {
 const styles = StyleSheet.create({
   chip: {
     borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: "rgba(15, 122, 105, 0.12)",
+    borderWidth: 0,
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
   warning: {
-    backgroundColor: "#FFF4E5",
-    borderColor: "#F1C47B",
+    backgroundColor: "rgba(178, 106, 0, 0.12)",
+  },
+  warningDot: {
+    backgroundColor: colors.warning,
   },
   label: {
-    color: colors.text,
+    color: colors.primary,
     fontSize: 12,
     fontWeight: "700",
   },
