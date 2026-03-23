@@ -35,12 +35,14 @@ Create a `.env` file in the root directory with the following variables:
 EXPO_PUBLIC_SEGMENTATION_API_BASE=https://zazaman-aerobiosys-wound-analysis.hf.space
 EXPO_PUBLIC_CLASSIFICATION_API_BASE=https://zazaman-wound-classification-demo.hf.space
 EXPO_PUBLIC_SIZE_API_BASE=https://zazaman-woundsz.hf.space
+EXPO_PUBLIC_GEMINI_API_KEY=your_key
 ```
 
 These environment variables point to the three Hugging Face Space backends:
 - **Segmentation API**: Wound image segmentation analysis
 - **Classification API**: Wound classification and categorization
 - **Size API (woundsz)**: Wound size and tissue composition analysis
+- **Gemini API Key**: AI analysis capability (get from https://aistudio.google.com/app/apikey)
 
 ## Running the App
 
@@ -108,6 +110,7 @@ wounddoc/
 │   │   └── typography.ts
 │   └── services/
 │       ├── api/                     # HF Space API clients
+│       ├── gemini/                  # Gemini AI analysis client
 │       └── storage/                 # AsyncStorage and FileSystem wrappers
 ├── docs/                            # Documentation
 └── package.json
@@ -177,6 +180,57 @@ When adding or updating tissue color mappings:
 2. **Update `TISSUE_COLORS`** in the TissueHistoryChart component
 3. Ensure consistency between both definitions
 4. Use theme colors from `@/src/theme/colors.ts`
+
+## AI Analysis Features
+
+### Gemini API Setup
+
+The app uses **Google's Gemini API** for on-demand AI analysis of wounds and observations. This feature is **never auto-triggered**—it only runs when the user explicitly requests analysis through the UI.
+
+**Model**: `gemini-3.1-flash-lite-preview`
+
+To find available models or change the model:
+```bash
+curl "https://generativelanguage.googleapis.com/v1beta/models?key={EXPO_PUBLIC_GEMINI_API_KEY}"
+```
+
+Always fetch the live model list from the API rather than guessing model names.
+
+### Store Actions for AI Analysis
+
+Two new store actions handle saving AI analysis results:
+
+- **`saveWoundAiAnalysis(woundId, analysis)`** — Saves analysis to a `WoundRecord`
+- **`saveObservationAiAnalysis(woundId, obsId, analysis)`** — Saves analysis to a `WoundObservation`
+
+These actions persist results to both the in-memory store and to AsyncStorage.
+
+### AiAnalysisCard Component
+
+The **`AiAnalysisCard`** is a reusable component for displaying AI analysis results. It:
+- Shows analysis text in a card with theme styling
+- Can be used for wound-level or observation-level analysis
+- Designed to be extensible for future AI features
+- Never auto-triggers analysis—only displays results
+
+Example usage:
+```typescript
+import AiAnalysisCard from '@/src/components/AiAnalysisCard';
+
+<AiAnalysisCard analysis={woundRecord.aiAnalysis} />
+```
+
+### Common Pitfall: Free Tier Quota Exhaustion
+
+**Problem**: API requests start failing with quota errors after initial use
+
+**Solution**: Enable billing on your Google AI Studio account:
+1. Visit https://aistudio.google.com/app/apikey
+2. Click "Enable billing" on your project
+3. Set up a payment method (free tier has limited quota)
+4. Verify `EXPO_PUBLIC_GEMINI_API_KEY` is set correctly in `.env`
+
+The free tier quota resets daily but is limited. For development, enabling billing is recommended.
 
 ## Deployment
 

@@ -33,6 +33,7 @@ wounddoc/
 │   └── _layout.tsx                   # App root layout
 ├── src/
 │   ├── components/
+│   │   ├── AiAnalysisCard.tsx        # AI clinical analysis display card (Gemini results)
 │   │   ├── AppButton.tsx             # Primary/secondary/danger buttons with press animation
 │   │   ├── AppCard.tsx               # Styled card with shadow and border
 │   │   ├── AreaSparkline.tsx         # Zero-dependency area-over-time line chart
@@ -52,13 +53,14 @@ wounddoc/
 │   │   │   ├── auth.repository.ts    # Token persistence and auth operations
 │   │   │   └── auth.types.ts         # Auth-related type definitions
 │   │   ├── inference/
+│   │   │   ├── gemini.client.ts      # GeminiClient: analyzeObservation(), analyzeProgress() for AI insights
 │   │   │   ├── inference.client.ts   # API client: classifyWound(), segmentWound(), detectWoundSize()
 │   │   │   ├── inference.mappers.ts  # Response mappers: mapSegmentationToObservationMetrics, pickOverlayDataUrl, pickRectifiedOverlayDataUrl
 │   │   │   └── inference.types.ts    # ClassificationResponse, SegmentationResponse, SizeDetectionResponse
 │   │   └── wounds/
 │   │       ├── wounds.store.ts       # Zustand wounds store: CRUD operations on wounds and observations
 │   │       ├── wounds.repository.ts  # AsyncStorage persistence (key: wounddoc:wounds:v1)
-│   │       ├── wounds.types.ts       # WoundRecord, WoundObservation with tissue/calibration data
+│   │       ├── wounds.types.ts       # WoundRecord, WoundObservation with tissue/calibration data + aiAnalysis
 │   │       └── woundSelectors.ts     # Computed selectors: area trends, tissue history, statistics
 │   ├── lib/
 │   │   ├── config.ts                 # API configuration (segmentation, classification, size bases)
@@ -235,6 +237,170 @@ After successful inference:
 3. **Rectified overlay**: Saved to `documents/wounddoc/overlays/{woundId}_{obsId}_rectified.jpg`
 
 Filenames include wound ID and observation ID for cross-referencing. Deletion is coordinated across all three files when an observation is removed.
+
+---
+
+## AI Clinical Analysis (Gemini)
+
+WoundDoc integrates Google's Gemini AI model to provide clinical insights and analysis of wound progression. This capability runs on-demand and never auto-executes, giving clinicians full control over when analysis occurs.
+
+### Overview
+
+**Model:** `gemini-3.1-flash-lite-preview` via Gemini REST API
+
+**API endpoint:** `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+
+**Authentication:** `EXPO_PUBLIC_GEMINI_API_KEY` (environment variable, inlined at Metro build time)
+
+**Key principle:** Analysis is on-demand only. Users explicitly trigger analysis via UI buttons; results are persisted to AsyncStorage.
+
+### Architecture Components
+
+**Files involved:**
+- `src/features/inference/gemini.client.ts` — GeminiClient class with analysis methods
+- `src/components/AiAnalysisCard.tsx` — UI card component displaying results
+- `src/features/wounds/wounds.types.ts` — `aiAnalysis` field on WoundObservation and WoundRecord
+- `src/features/wounds/wounds.store.ts` — `saveWoundAiAnalysis`, `saveObservationAiAnalysis` actions
+
+### Analysis Modes
+
+The GeminiClient provides two analysis methods:
+
+**1. analyzeObservation(obs, wound)**
+- Analyzes a single observation in the context of its wound
+- Sends best-quality image: rectified > overlay > original
+- Includes wound metrics: total area (cm²), infection risk, tissue breakdown
+- Includes ArUco calibration metadata
+- Includes clinician notes from both observation and wound
+
+**2. analyzeProgress(wound, mode)**
+- Analyzes wound progression across multiple observations
+- `mode='all'`: sends all observations chronologically for full trajectory analysis
+- `mode='last_two'`: sends last 2 observations for comparison-focused insights
+- Enables detection of healing trajectory and trend analysis
+
+### Multimodal Request Format
+
+For each observation sent to Gemini, the request includes:
+
+**Image data:**
+- Wound image as base64-encoded inlineData (JPEG format)
+- Always uses best-quality image available (rectified preferred)
+
+**Text context:**
+- Total wound area in cm²
+- Infection risk assessment (if available)
+- Tissue breakdown by type and percentage/cm²
+- ArUco calibration metadata (detection status, scale factor, marker size)
+- Clinician notes (observation-specific + wound-level notes)
+
+### Gemini Response Schema
+
+All responses are validated JSON with the following structure:
+
+```typescript
+{
+  summary: string;                                      // Concise clinical summary
+  keyFindings: string[];                                // Array of significant findings
+  recommendations: string[];                           // Clinical recommendations
+  healingTrajectory: 'improving' | 'stable' | 'worsening' | 'insufficient_data';
+  concerns: string[];                                   // Safety/clinical concerns
+}
+```
+
+**Field descriptions:**
+- `summary` — 1–2 sentence clinical assessment
+- `keyFindings` — 3–5 bullet points of notable observations
+- `recommendations` — Suggested clinical actions or monitoring strategies
+- `healingTrajectory` — Wound progression direction (requires 2+ observations for accuracy)
+- `concerns` — Red flags or items requiring immediate attention
+
+### UI Component: AiAnalysisCard
+
+**Location:** Displayed on wound detail screen (`[woundId].tsx`)
+
+**Features:**
+- **On-demand analysis only** — Primary button: "Analyse" or "Re-analyse"
+- **Optional secondary button** — e.g., "Compare last two visits" (triggers `analyzeProgress` with mode='last_two')
+- **Healing trajectory pill** — Color-coded visual indicator (improving=green, stable=yellow, worsening=red, insufficient_data=gray)
+- **Structured result sections:**
+  - Summary block (gray background)
+  - Key Findings list (bullet points)
+  - Concerns section (highlighted if present)
+  - Recommendations section
+- **Clinical disclaimer** — Always displayed, emphasizing AI is supplementary to clinical judgment
+- **Loading state** — Shows spinner while Gemini API processes request
+- **Error handling** — Displays user-friendly error messages if analysis fails
+
+### Integration on Wound Detail Screen
+
+**Wound-level analysis:**
+- Progress analysis card displayed in header section (above observations list)
+- Analyzes full wound history (mode='all')
+- Provides trajectory assessment across all observations
+
+**Per-observation analysis:**
+- Individual analysis card at bottom of each observation card
+- Single-observation analysis
+- Optional secondary button for comparison (last_two mode)
+
+### Data Persistence
+
+Analysis results are persisted via store actions:
+
+**`saveWoundAiAnalysis(woundId, aiAnalysis)`**
+- Stores wound-level analysis result to `WoundRecord.aiAnalysis`
+- Replaces previous analysis (only latest persisted)
+- Triggers AsyncStorage write via repository
+
+**`saveObservationAiAnalysis(woundId, obsId, aiAnalysis)`**
+- Stores observation-level analysis result to `WoundObservation.aiAnalysis`
+- Replaces previous analysis for that observation
+- Triggers AsyncStorage write via repository
+
+**Data structure in store:**
+```typescript
+interface WoundRecord {
+  // ... existing fields
+  aiAnalysis?: {
+    summary: string;
+    keyFindings: string[];
+    recommendations: string[];
+    healingTrajectory: 'improving' | 'stable' | 'worsening' | 'insufficient_data';
+    concerns: string[];
+    generatedAt: Date;  // Timestamp of analysis
+  };
+}
+
+interface WoundObservation {
+  // ... existing fields
+  aiAnalysis?: {
+    summary: string;
+    keyFindings: string[];
+    recommendations: string[];
+    healingTrajectory: 'improving' | 'stable' | 'worsening' | 'insufficient_data';
+    concerns: string[];
+    generatedAt: Date;  // Timestamp of analysis
+  };
+}
+```
+
+### Error Handling & Edge Cases
+
+- **Network failure:** Displays retry button; no partial persistence
+- **Invalid API key:** Graceful message directing user to settings
+- **Rate limiting:** Exponential backoff with user notification
+- **Insufficient observations:** `analyzeProgress` returns `healingTrajectory: 'insufficient_data'` if < 2 observations
+- **Missing image:** Uses text-only analysis (metrics + notes, no multimodal)
+- **Malformed response:** Validates JSON schema before persistence; displays error if invalid
+
+### Security & Privacy
+
+- API key stored in environment variable, never logged or transmitted insecurely
+- Images sent only to Google Gemini API (third-party service)
+- Analysis results stored locally on device (AsyncStorage)
+- No data sent to WoundDoc servers
+- Users can delete analysis results via observation/wound deletion
 
 ---
 
@@ -663,6 +829,8 @@ WoundDoc uses **Zustand** for scalable, minimal-boilerplate state management.
 - `updateWoundTypeOverride(woundId: string, override?: string)` – Set manual override
 - `updateWoundDetails(woundId: string, location?: string, notes?: string)` – Update metadata
 - `updateObservationNotes(woundId: string, obsId: string, notes: string)` – Update observation notes
+- `saveWoundAiAnalysis(woundId: string, aiAnalysis: AiAnalysis)` – Store wound-level AI analysis result
+- `saveObservationAiAnalysis(woundId: string, obsId: string, aiAnalysis: AiAnalysis)` – Store observation-level AI analysis result
 
 **Persistence:**
 - Repository hydrates store from AsyncStorage on app launch
@@ -758,6 +926,7 @@ WoundDoc is architected for extensibility:
 EXPO_PUBLIC_CLASSIFICATION_API_BASE=https://zazaman-wound-classification-demo.hf.space
 EXPO_PUBLIC_SEGMENTATION_API_BASE=https://zazaman-Aerobiosys-Wound-Analysis.hf.space
 EXPO_PUBLIC_SIZE_API_BASE=https://zazaman-woundsz.hf.space
+EXPO_PUBLIC_GEMINI_API_KEY=<your-gemini-api-key>
 ```
 
 ### Key Dependencies

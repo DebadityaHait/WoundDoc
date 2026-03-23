@@ -13,6 +13,7 @@ Use this file as the first context block when asking an AI coding assistant to w
 2. AI backend classifies wound type, segments tissue, and detects size (perspective-corrected via ArUco)
 3. Track observations across multiple visits
 4. View healing trends via sparkline charts and tissue composition history
+5. Request on-demand AI analysis via Google's Gemini API (never auto-triggered)
 
 ---
 
@@ -27,6 +28,7 @@ Use this file as the first context block when asking an AI coding assistant to w
 - **AsyncStorage** + **FileSystem** (local-first persistence)
 - **No `react-native-svg`** — pure View/StyleSheet for components
 - **No charting library** — custom sparkline/bar chart components
+- **Google Generative AI** (Gemini API for on-demand analysis)
 
 ### Backend (3 Hugging Face Spaces)
 1. **Classification Space** (`wound-classification-demo/`) — wound type detection
@@ -34,6 +36,12 @@ Use this file as the first context block when asking an AI coding assistant to w
 3. **Size Space** (`Aerobiosys-Wound-Size-Space/`) — ArUco-calibrated size & perspective correction
 
 All three return JSON; inference client runs them in parallel via `Promise.allSettled`.
+
+### AI Analysis (Google Gemini)
+- **Gemini API** for on-demand wound and observation analysis
+- **Model**: `gemini-3.1-flash-lite-preview` (always fetch live model list from API)
+- **Environment variable**: `EXPO_PUBLIC_GEMINI_API_KEY`
+- **Behavior**: User-triggered only, never auto-run
 
 ---
 
@@ -43,7 +51,7 @@ All three return JSON; inference client runs them in parallel via `Promise.allSe
 |--------|------|---------|
 | Dashboard | `(app)/index.tsx` | Wound cards, mini sparklines, healing trends |
 | New Wound | `(app)/wounds/new.tsx` | Create wound, parallel inference calls, type selection |
-| Wound Detail | `(app)/wounds/[woundId].tsx` | Size tracking, full sparkline, tissue history, notes |
+| Wound Detail | `(app)/wounds/[woundId].tsx` | Size tracking, full sparkline, tissue history, notes, AI analysis button |
 | Add Observation | `(app)/wounds/add-observation.tsx` | Photograph + inference + size detection |
 | ArUco Generator | `(app)/aruco-marker.tsx` | On-screen marker generator (DPI-calibrated) |
 | Settings | `(app)/settings.tsx` | API URLs, ArUco help link, sign out |
@@ -79,6 +87,14 @@ All three return JSON; inference client runs them in parallel via `Promise.allSe
 ### `WoundTypeBadge`
 - Displays human-readable wound type label
 - Looks up type via `WOUND_TYPE_OPTIONS` constant
+
+### `AiAnalysisCard`
+- **Reusable component** for displaying AI analysis results
+- Shows analysis text in a styled card
+- Can display wound-level or observation-level analysis
+- Never auto-runs analysis—only displays results
+- Designed to be extensible for future AI features
+- Props: `analysis?: string | null`, `loading?: boolean`, `onRetry?: () => void`
 
 ### `StatChip`
 - Small inline stat card (e.g., "Area: 5.2 cm²")
@@ -124,6 +140,99 @@ const [classResult, segResult, sizeResult] = await Promise.allSettled([
 
 ---
 
+## AI Analysis Pipeline (Gemini)
+
+### Gemini Client Methods
+
+Located in `src/services/gemini/geminiClient.ts`:
+
+```typescript
+// Analyze a single observation
+geminiClient.analyzeObservation(observation: WoundObservation, wound: WoundRecord) 
+  → Promise<GeminiAnalysisResult>
+
+// Analyze wound progress over time
+geminiClient.analyzeProgress(wound: WoundRecord, mode: 'all' | 'last_two')
+  → Promise<GeminiAnalysisResult>
+```
+
+### Analysis Results
+
+Both methods return:
+```typescript
+type GeminiAnalysisResult = {
+  text: string;           // Analysis text from Gemini
+  timestamp: number;      // When analysis was generated
+  modelUsed: string;      // Model identifier
+};
+```
+
+### Data Models with AI Fields
+
+**WoundRecord** now includes:
+```typescript
+{
+  // ... existing fields ...
+  aiAnalysis?: {
+    text: string;
+    timestamp: number;
+    modelUsed: string;
+  };
+}
+```
+
+**WoundObservation** now includes:
+```typescript
+{
+  // ... existing fields ...
+  aiAnalysis?: {
+    text: string;
+    timestamp: number;
+    modelUsed: string;
+  };
+}
+```
+
+### Store Actions for AI Analysis
+
+New actions in `wounds.store.ts`:
+
+```typescript
+// Save analysis to wound record
+saveWoundAiAnalysis(woundId: string, analysis: GeminiAnalysisResult) → void
+
+// Save analysis to specific observation
+saveObservationAiAnalysis(woundId: string, obsId: string, analysis: GeminiAnalysisResult) → void
+```
+
+Both actions:
+- Persist to in-memory store
+- Persist to AsyncStorage
+- Include error handling via try/catch
+
+### AiAnalysisCard Usage
+
+Display analysis results in any screen:
+
+```typescript
+import AiAnalysisCard from '@/src/components/AiAnalysisCard';
+
+<AiAnalysisCard 
+  analysis={woundRecord.aiAnalysis?.text}
+  loading={isAnalyzing}
+  onRetry={() => triggerAnalysis()}
+/>
+```
+
+### Critical Constraint: On-Demand Only
+
+- **AI analysis MUST be user-triggered** via a button or menu action
+- **NEVER auto-run analysis** on observation creation, page load, or any background process
+- Always show loading state while analysis is in progress
+- Provide error messages if analysis fails
+
+---
+
 ## Data Models
 
 ### `WoundRecord` (wounds.types.ts)
@@ -137,6 +246,11 @@ const [classResult, segResult, sizeResult] = await Promise.allSettled([
   coverImageUri: string;             // first observation preview
   createdAt: number;                 // timestamp
   updatedAt: number;
+  aiAnalysis?: {                     // Optional AI analysis
+    text: string;
+    timestamp: number;
+    modelUsed: string;
+  };
 }
 ```
 
@@ -170,6 +284,11 @@ const [classResult, segResult, sizeResult] = await Promise.allSettled([
   };
   notes: string;                     // clinician observations
   createdAt: number;
+  aiAnalysis?: {                     // Optional AI analysis
+    text: string;
+    timestamp: number;
+    modelUsed: string;
+  };
 }
 ```
 
@@ -191,6 +310,8 @@ const [classResult, segResult, sizeResult] = await Promise.allSettled([
 - `updateWoundType(woundId, woundType)` → void
 - `updateWoundDetails(woundId, updates)` → void
 - `updateObservationNotes(woundId, observationId, notes)` → void
+- `saveWoundAiAnalysis(woundId, analysis)` → void ⭐ **NEW**
+- `saveObservationAiAnalysis(woundId, obsId, analysis)` → void ⭐ **NEW**
 - `clearAll()` → void
 - `hydrate(state)` → void (init from storage)
 
@@ -207,6 +328,7 @@ const [classResult, segResult, sizeResult] = await Promise.allSettled([
 EXPO_PUBLIC_SEGMENTATION_API_BASE=https://zazaman-aerobiosys-wound-analysis.hf.space
 EXPO_PUBLIC_CLASSIFICATION_API_BASE=https://zazaman-wound-classification-demo.hf.space
 EXPO_PUBLIC_SIZE_API_BASE=https://zazaman-aerobiosys-wound-size-space.hf.space
+EXPO_PUBLIC_GEMINI_API_KEY=your_api_key_here
 ```
 
 **Important:** Env vars are inlined at Metro build time. Always restart with:
@@ -225,6 +347,16 @@ after modifying `.env`.
 - No `console.log` in production (use error boundaries)
 - Handle Promise rejections gracefully (show user feedback)
 
+### AI & Automation Constraints ⭐ CRITICAL
+- **Do NOT auto-push to GitHub** — always wait for explicit user permission
+- **Do NOT auto-run AI analysis** — analysis must be user-triggered via UI button or menu action
+- **Never auto-analyze** on observation creation, page load, or background processes
+- When referencing Gemini models, **always fetch the live model list** from the API:
+  ```bash
+  curl "https://generativelanguage.googleapis.com/v1beta/models?key={EXPO_PUBLIC_GEMINI_API_KEY}"
+  ```
+  Do not hardcode or guess model names.
+
 ### Dependencies
 - No new npm packages without team discussion
 - Keep `Gradio==4.44.1` and `huggingface_hub==0.23.5` pinned in Space READMEs
@@ -234,12 +366,14 @@ after modifying `.env`.
 - Tissue color keys used in `TissueHistoryChart.tsx` must match those in `[woundId].tsx` detail view
 - Metrics from size detection (rectified) preferred over segmentation (basic)
 - All images stored locally; no automatic cloud sync yet
+- AI analysis results persist to AsyncStorage alongside wound data
 
 ### Naming
 - Store: `wounds.store.ts`
 - Types: `wounds.types.ts`
 - API Client: `inference.client.ts`
 - Mappers: `inference.mappers.ts`
+- Gemini Client: `gemini/geminiClient.ts`
 
 ---
 
@@ -251,6 +385,7 @@ after modifying `.env`.
 - **Export/share** wound report not yet implemented
 - **Offline sync** queue for future cloud migration
 - **Push notifications** for follow-up reminders not yet added
+- **Gemini API rate limiting** — implement backoff strategy for high-volume analysis requests
 
 ---
 
@@ -309,6 +444,9 @@ Constraints:
 - Preserve local-first storage semantics
 - TypeScript strict mode only
 - Update docs for behavior changes
+- NEVER auto-run AI analysis — user-triggered only
+- NEVER auto-push to GitHub — wait for permission
+- Always fetch live Gemini model list from API, never hardcode
 
 Deliverables:
 - Code changes
@@ -325,4 +463,5 @@ Deliverables:
 ✓ New behavior documented in README/CURSOR_BOOTSTRAP  
 ✓ If dependency versions pinned, explain why  
 ✓ All images/overlays persist correctly  
+✓ AI analysis is user-triggered only, never auto-run  
 ✓ Tested on device (or Expo Go)

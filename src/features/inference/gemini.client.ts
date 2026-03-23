@@ -18,7 +18,7 @@ import { WoundObservation, WoundRecord } from "@/src/features/wounds/wounds.type
 import { readImageAsDataUrl } from "@/src/lib/image";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-const GEMINI_MODEL = "gemini-2.0-flash-lite";
+const GEMINI_MODEL = "gemini-3.1-flash-lite-preview";
 
 export type GeminiAnalysisResult = {
   /** Main clinical narrative */
